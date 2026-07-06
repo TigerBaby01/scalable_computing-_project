@@ -1,66 +1,61 @@
 # Dublin Bus Real-Time Delay Analytics — Kinesis Producer
 
-## Overview
-This component ingests the NTA GTFS-Realtime TripUpdates feed and streams
-parsed delay records into AWS Kinesis Data Streams every 30 seconds.
+A high-performance real-time data ingestion pipeline that polls, parses, and streams Dublin Bus GTFS-Realtime (GTFS-RT) Trip Updates into AWS Kinesis Data Streams for downstream analytics.
 
-## Files
-| File | Purpose |
-|---|---|
-| `kinesis_producer.py` | Main polling loop — fetches, parses, and publishes |
-| `setup_kinesis.py` | One-time Kinesis stream creation |
-| `load_simulator.py` | Captures a snapshot and replays at high rate for benchmarking |
-| `requirements.txt` | Python dependencies |
+---
 
-## Setup
+## Project Overview
 
-### 1. Get your NTA API Key
-1. Go to https://developer.nationaltransport.ie/signup and create an account
-2. Verify your email, then sign in at https://developer.nationaltransport.ie/signin
-3. Go to **APIs** in the top nav → click **GTFS-Realtime** → click **Subscribe**
-4. Your API key will appear under your profile — copy the **Primary Key**
+This project serves as the ingestion component (producer) of a scalable real-time speed/analytics layer for public transit delays in Dublin. It interfaces with the National Transport Authority (NTA) developer API, processes real-time Protocol Buffer (protobuf) feeds, structures the data into a flat JSON schema, and streams it to AWS Kinesis.
 
-### 2. Install dependencies
-```bash
-pip install -r requirements.txt
+```
+                  +--------------------------------+
+                  |   National Transport Authority |
+                  |    GTFS-RT protobuf Feed API   |
+                  +---------------+----------------+
+                                  |
+                                  | HTTP Get (Protobuf)
+                                  v
+                  +---------------+----------------+
+                  |   Dublin Bus Kinesis Producer  |
+                  |     (Python Polling Loop)      |
+                  +---------------+----------------+
+                                  |
+                                  | JSON records batch (PutRecords)
+                                  v
+                  +---------------+----------------+
+                  |    AWS Kinesis Data Stream     |
+                  |  (Route-ID Partitioned Shards) |
+                  +--------------------------------+
 ```
 
-### 3. Configure AWS credentials (AWS Academy)
-```bash
-# Paste your AWS Academy credentials into:
-~/.aws/credentials
-# Or export as environment variables:
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_SESSION_TOKEN=...
-```
+---
 
-### 4. Create the Kinesis stream
-```bash
-python setup_kinesis.py --stream-name dublin-bus-delays --shards 2 --region us-east-1
-```
+## Core Features
 
-### 5. Test with dry run first
-```bash
-python kinesis_producer.py --api-key YOUR_KEY --dry-run --max-polls 1
-```
+- **Protobuf Processing:** Consumes and decodes the NTA GTFS-Realtime TripUpdates protocol buffer feed.
+- **Data Enrichment:** Transforms hierarchical GTFS-RT feed updates into flat, structured JSON records with calculated delay values, timestamps, and route context.
+- **AWS Kinesis Integration:** Utilizes Boto3 to stream batch updates using a partitioning scheme optimized for stream consumers.
+- **Route-Based Partitioning:** Uses `route_id` as the partition key to ensure that updates for the same bus route are routed to the same Kinesis shard, maintaining sequential order.
+- **Load Simulator & Benchmarker:** Includes a load simulator to capture live snapshots and replay them at amplified throughputs to benchmark ingestion limits, consumer scale, and latency.
 
-### 6. Start the producer
-```bash
-python kinesis_producer.py --api-key YOUR_KEY --stream-name dublin-bus-delays --interval 30
-```
+---
 
-## Benchmarking / Load Testing (Phase 3)
-```bash
-# Step 1: Capture a live snapshot
-python load_simulator.py --capture --api-key YOUR_KEY
+## File Structure
 
-# Step 2: Replay at 10x rate (100 records/sec for 5 minutes)
-python load_simulator.py --replay --rps 100 --duration 300 --stream-name dublin-bus-delays
-```
+| File | Description |
+| :--- | :--- |
+| [`kinesis_producer.py`](file:///Users/tigerbaby/Desktop/Badshah/Scalable/kinesis_producer.py) | Main ingestion application. Handles periodic polling of the NTA feed, parsing, batching, and writing to AWS Kinesis. |
+| [`setup_kinesis.py`](file:///Users/tigerbaby/Desktop/Badshah/Scalable/setup_kinesis.py) | Utility script to initialize and tag the AWS Kinesis stream with proper partition shard configuration. |
+| [`load_simulator.py`](file:///Users/tigerbaby/Desktop/Badshah/Scalable/load_simulator.py) | Simulation harness. Captures real-world bus delay snapshots and replays them at high rates to stress-test the data pipeline. |
+| [`requirements.txt`](file:///Users/tigerbaby/Desktop/Badshah/Scalable/requirements.txt) | Project dependencies (Boto3, Requests, GTFS-RT bindings, Protobuf). |
+
+---
 
 ## Record Schema
-Each record pushed to Kinesis:
+
+Each delay record emitted to AWS Kinesis follows this structured format:
+
 ```json
 {
   "feed_timestamp": "2026-06-29T12:00:00+00:00",
@@ -78,13 +73,18 @@ Each record pushed to Kinesis:
 }
 ```
 
-## Partition Key Strategy
-Records are partitioned by `route_id` so all records for a given route
-(e.g. "46A") land on the same Kinesis shard, preserving ordering per route.
+### Schema Attributes
 
-## Notes
-- 2 shards = 2 MB/s ingest capacity — sufficient for the NTA feed
-- The feed updates every ~30 seconds; polling more frequently won't give new data
-- AWS Academy sessions expire — re-export credentials if you get AuthErrors
-# scalable_computing-_project
-# scalable_computing-_project
+- `feed_timestamp`: The timestamp generated by the NTA when compiling the GTFS feed.
+- `ingestion_timestamp`: The ISO 8601 UTC timestamp when the producer parsed and processed the record.
+- `route_id` / `trip_id` / `stop_id`: Core identifiers linking the delay back to static GTFS schedule data.
+- `arrival_delay_s` / `departure_delay_s`: Arrival/departure delays represented in seconds (negative values indicate early transit).
+
+---
+
+## Stream Partitioning Strategy
+
+To guarantee sequential ordering of status updates for any individual route:
+- The stream partition key is mapped directly to `route_id` (e.g., `"46A"`, `"39A"`).
+- AWS Kinesis hashes this key to assign the record to a specific shard.
+- Since records with the same partition key always route to the same shard, consuming frameworks (such as Apache Spark or AWS Lambda) can process updates for a single bus route in the exact chronological order they were produced.
