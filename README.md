@@ -1,34 +1,4 @@
-<<<<<<< HEAD
-# Dublin Bus Real-Time Delay Analytics — Kinesis Producer
 
-A high-performance real-time data ingestion pipeline that polls, parses, and streams Dublin Bus GTFS-Realtime (GTFS-RT) Trip Updates into AWS Kinesis Data Streams for downstream analytics.
-
----
-
-## Project Overview
-
-This project serves as the ingestion component (producer) of a scalable real-time speed/analytics layer for public transit delays in Dublin. It interfaces with the National Transport Authority (NTA) developer API, processes real-time Protocol Buffer (protobuf) feeds, structures the data into a flat JSON schema, and streams it to AWS Kinesis.
-
-```
-                  +--------------------------------+
-                  |   National Transport Authority |
-                  |    GTFS-RT protobuf Feed API   |
-                  +---------------+----------------+
-                                  |
-                                  | HTTP Get (Protobuf)
-                                  v
-                  +---------------+----------------+
-                  |   Dublin Bus Kinesis Producer  |
-                  |     (Python Polling Loop)      |
-                  +---------------+----------------+
-                                  |
-                                  | JSON records batch (PutRecords)
-                                  v
-                  +---------------+----------------+
-                  |    AWS Kinesis Data Stream     |
-                  |  (Route-ID Partitioned Shards) |
-                  +--------------------------------+
-=======
 # 🇮🇪 Dublin Bus Live Delays Real-Time Streaming & Analytics Engine
 
 A scalable, end-to-end real-time data streaming and analytics pipeline that ingests live GTFS-Realtime (GTFS-R) feed updates from the National Transport Authority (NTA) of Ireland, streams it through Apache Kafka, performs stateful windowed aggregations with PySpark, and outputs telemetry to both a serving database (AWS DynamoDB) and a local historical data lake.
