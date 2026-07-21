@@ -1,0 +1,12 @@
+# Reduce how long log segments are kept before deletion (change from 168 hours to 10 minutes)
+log.retention.minutes=10
+ 
+# Reduce the maximum size of a log file before deletion (set to 50 MB)
+log.retention.bytes=52428800
+ 
+# Change the segment roll time to force Kafka to clean up files faster (set to 2 minutes)
+log.roll.hours=0
+log.roll.minutes=2
+ 
+# Reduce the file size of an individual log segment chunk
+log.segment.bytes=10485760
