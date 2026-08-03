@@ -1,6 +1,6 @@
-import json
+import time
 
-import redis
+import json
 
 from pyspark.sql import SparkSession
 
@@ -20,43 +20,99 @@ bus_schema = StructType([
 
 ])
  
-def send_to_redis(batch_df, batch_id):
-
-    r = redis.Redis(host='localhost', port=6379, db=0)
-
-    records = batch_df.collect()
-
-    for row in records:
-
-        route_id = row['route_id']
-
-        avg_delay = round(row['average_delay_seconds'], 2)
-
-        r.set(f"live:{route_id}", avg_delay)
-
-    print(f"[SPEED LAYER] Successfully updated {len(records)} live routes in Redis.")
- 
-# Single line builder blocks to eliminate indentation bugs
+# Initialize Spark Session
 
 spark = SparkSession.builder.appName("DublinBusSpeedLayer").getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
  
-# Flattened read stream properties
+# Read Kafka Stream
 
-kafka_stream_df = spark.readStream.format("kafka").option("kafka.bootstrap.servers", "127.0.0.1:9092").option("subscribe", "dublin-bus-delays").option("startingOffsets", "latest").load()
+kafka_stream_df = spark.readStream \
+
+    .format("kafka") \
+
+    .option("kafka.bootstrap.servers", "127.0.0.1:9092") \
+
+    .option("subscribe", "dublin-bus-delays") \
+
+    .option("startingOffsets", "latest") \
+
+    .load()
  
-# Parse JSON strings matching schema
+# Parse JSON payloads
 
-parsed_df = kafka_stream_df.selectExpr("CAST(value AS STRING) as json_str").select(from_json(col("json_str"), bus_schema).alias("data")).select("data.*")
+parsed_df = kafka_stream_df \
+
+    .selectExpr("CAST(value AS STRING) as json_str") \
+
+    .select(from_json(col("json_str"), bus_schema).alias("data")) \
+
+    .select("data.*")
  
 # Calculate 5-Minute Sliding Windows shifting every 1 minute
 
-windowed_df = parsed_df.groupBy(window(col("timestamp"), "5 minutes", "1 minute"), col("route_id")).agg(avg("delay_seconds").alias("average_delay_seconds"))
+windowed_df = parsed_df \
+
+    .groupBy(
+
+        window(col("timestamp"), "5 minutes", "1 minute"), 
+
+        col("route_id")
+
+    ) \
+
+    .agg(avg("delay_seconds").alias("average_delay_seconds"))
  
-# Flattened streaming sink launch properties 
+# Write directly to an In-Memory Table
 
-query = windowed_df.writeStream.outputMode("update").foreachBatch(send_to_redis).start()
+# Note: 'complete' mode is used here so the memory table shows full current window aggregates
 
-query.awaitTermination()
+query = windowed_df.writeStream \
+
+    .format("memory") \
+
+    .queryName("serving_layer_speed") \
+
+    .outputMode("complete") \
+
+    .start()
+ 
+print("[SPEED LAYER] In-memory serving table 'serving_layer_speed' starting...")
+ 
+# Periodically query and display the top live route delays in console
+
+try:
+
+    while query.isActive:
+
+        time.sleep(10)
+
+        print("\n=== [SERVING LAYER] LIVE SPEED TABLE (In-Memory) ===")
+
+        spark.sql("""
+
+            SELECT 
+
+                route_id, 
+
+                round(average_delay_seconds, 2) as avg_delay_sec,
+
+                window.start as window_start,
+
+                window.end as window_end
+
+            FROM serving_layer_speed 
+
+            ORDER BY average_delay_seconds DESC
+
+            LIMIT 10
+
+        """).show(truncate=False)
+
+except KeyboardInterrupt:
+
+    print("[SPEED LAYER] Stopping stream...")
+
+    query.stop()
  
